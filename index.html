@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>くまちゃんエアホッケー（完全版）</title>
+    <style>
+        body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+        canvas { background: #555; border: 4px solid #fff; max-width: 100%; max-height: 100%; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="450"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// --- 音声システム (Web Audio API) ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playSound(type) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+
+    if (type === 'hit') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+    } else if (type === 'score') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(600, audioCtx.currentTime + 0.1);
+        osc.frequency.setValueAtTime(800, audioCtx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+    } else if (type === 'gameover') {
+        // ピロリロリコーン（試合終了音）
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523, audioCtx.currentTime); // ド
+        osc.frequency.setValueAtTime(659, audioCtx.currentTime + 0.1); // ミ
+        osc.frequency.setValueAtTime(784, audioCtx.currentTime + 0.2); // ソ
+        osc.frequency.setValueAtTime(1046, audioCtx.currentTime + 0.3); // ド
+        gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.6);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.6);
+    }
+}
+
+// --- ゲームの状態（ステート）管理 ---
+// 'TITLE' : タイトル画面（クリック待ち）
+// 'PLAY'  : 試合中
+// 'GAMEOVER' : 試合終了・記録表示（クリックでコンテニュー）
+let gameState = 'TITLE'; 
+
+const MATCH_POINT = 7; // 何点先取でゲーム終了にするか
+let playerScore = 0, enemyScore = 0;
+let matchResult = ''; // 'WIN' または 'LOSE'
+
+let puck = { x: 400, y: 250, vx: 0, vy: 0, radius: 15 };
+let player = { x: 400, y: 380, radius: 25 };
+let enemy = { x: 400, y: 120, radius: 25, speed: 4, state: 'normal' };
+
+// --- クリック・タップによる画面遷移の処理 ---
+function handleScreenClick() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    if (gameState === 'TITLE') {
+        // タイトルからゲーム開始
+        resetGame();
+        gameState = 'PLAY';
+    } else if (gameState === 'GAMEOVER') {
+        // コンテニューしてタイトルに戻る
+        gameState = 'TITLE';
+    }
+}
+canvas.addEventListener('click', handleScreenClick);
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    handleScreenClick();
+}, { passive: false });
+
+// 操作イベント
+function movePlayer(clientX, clientY) {
+    if (gameState !== 'PLAY') return; // 試合中以外は操作無効
+    const rect = canvas.getBoundingClientRect();
+    let targetX = (clientX - rect.left) * (canvas.width / rect.width);
+    let targetY = (clientY - rect.top) * (canvas.height / rect.height);
+    
+    player.x = Math.max(175, Math.min(625, targetX)); 
+    player.y = Math.max(240, Math.min(425, targetY));
+}
+canvas.addEventListener("mousemove", (e) => movePlayer(e.clientX, e.clientY));
+canvas.addEventListener("touchmove", (e) => { e.preventDefault(); movePlayer(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+
+function resetGame() {
+    playerScore = 0;
+    enemyScore = 0;
+    player.x = 400; player.y = 380;
+    enemy.x = 400; enemy.y = 120;
+    resetPuck();
+}
+
+function resetPuck() { 
+    puck.x = 400; puck.y = 250; 
+    puck.vx = (Math.random() > 0.5 ? 5 : -5); 
+    puck.vy = (Math.random() > 0.5 ? 4 : -4); 
+}
+
+// --- メインループ ---
+function gameLoop() {
+    if (gameState === 'PLAY') {
+        update();
+    }
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function update() {
+    puck.x += puck.vx; puck.y += puck.vy;
+
+    // 壁の衝突
+    if (puck.x - puck.radius < 150 || puck.x + puck.radius > 650) {
+        puck.vx *= -1;
+        puck.x = puck.x - puck.radius < 150 ? 150 + puck.radius : 650 - puck.radius;
+        playSound('hit');
+    }
+
+    // ゴール判定
+    if (puck.y - puck.radius < 40) {
+        if (puck.x > 320 && puck.x < 480) { 
+            playerScore++; 
+            playSound('score'); 
+            if (playerScore >= MATCH_POINT) {
+                matchResult = 'WIN';
+                gameState = 'GAMEOVER';
+                playSound('gameover');
+            } else {
+                resetPuck();
+            }
+        } else { 
+            puck.vy *= -1; puck.y = 40 + puck.radius; playSound('hit'); 
+        }
+    }
+    if (puck.y + puck.radius > 430) {
+        if (puck.x > 320 && puck.x < 480) { 
+            enemyScore++; 
+            playSound('score'); 
+            if (enemyScore >= MATCH_POINT) {
+                matchResult = 'LOSE';
+                gameState = 'GAMEOVER';
+                playSound('gameover');
+            } else {
+                resetPuck();
+            }
+        } else { 
+            puck.vy *= -1; puck.y = 430 - puck.radius; playSound('hit'); 
+        }
+    }
+
+    // 敵のAI
+    if (enemy.x < puck.x - 15) { enemy.x += enemy.speed; enemy.state = 'right'; }
+    else if (enemy.x > puck.x + 15) { enemy.x -= enemy.speed; enemy.state = 'left'; }
+    else { enemy.state = 'normal'; }
+
+    if (checkCollision(player)) { enemy.state = 'hit'; }
+    checkCollision(enemy);
+}
+
+function checkCollision(mallet) {
+    let dx = puck.x - mallet.x, dy = puck.y - mallet.y;
+    let distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance < puck.radius + mallet.radius) {
+        let angle = Math.atan2(dy, dx);
+        let speed = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+        puck.vx = Math.cos(angle) * (speed + 0.2);
+        puck.vy = Math.sin(angle) * (speed + 0.2);
+        playSound('hit');
+        return true;
+    }
+    return false;
+}
+
+// --- 描画処理 ---
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 背景コート
+    ctx.fillStyle = "#7cd130"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#facc48"; ctx.fillRect(150, 40, 500, 390);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.strokeRect(150, 40, 500, 390);
+    ctx.strokeStyle = "rgba(255,255,255,0.6)";
+    ctx.beginPath(); ctx.moveTo(150, 235); ctx.lineTo(650, 235); ctx.stroke();
+    ctx.fillStyle = "#e63946"; ctx.fillRect(320, 30, 160, 10); ctx.fillRect(320, 430, 160, 10);
+
+    // 敵「二重顎のくま」
+    let kX = enemy.x, kY = enemy.y - 40;
+    ctx.fillStyle = "#8B4513";
+    ctx.beginPath(); ctx.arc(kX - 35, kY - 30, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(kX + 35, kY - 30, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#5c2c04"; ctx.beginPath(); ctx.arc(kX, kY + 15, 45, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#8B4513"; ctx.beginPath(); ctx.arc(kX, kY, 40, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#DEB887"; ctx.beginPath(); ctx.arc(kX, kY + 15, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#000"; ctx.beginPath(); ctx.arc(kX, kY + 8, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(kX - 15, kY - 10, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(kX + 15, kY - 10, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#000";
+    let pupilX = 0, pupilY = 0;
+    if (enemy.state === 'left')  { pupilX = -3; }
+    if (enemy.state === 'right') { pupilX = 3; }
+    if (enemy.state === 'hit')   { pupilY = -3; }
+    ctx.beginPath(); ctx.arc(kX - 15 + pupilX, kY - 10 + pupilY, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(kX + 15 + pupilX, kY - 10 + pupilY, 4, 0, Math.PI * 2); ctx.fill();
+
+    // マレットとパック
+    ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#aaa"; ctx.stroke();
+    ctx.fillStyle = "#1d3557"; ctx.beginPath(); ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#457b9d"; ctx.beginPath(); ctx.arc(player.x, player.y, player.radius - 10, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#e63946"; ctx.beginPath(); ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2); ctx.fill();
+
+    // スコアサイドパネル
+    ctx.fillStyle = "#fff"; ctx.font = "bold 16px sans-serif";
+    ctx.fillText("相手のスコア", 20, 80);
+    ctx.font = "bold 40px monospace"; ctx.fillText(enemyScore.toString().padStart(2, '0'), 50, 130);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 16px sans-serif";
+    ctx.fillText("自分のスコア", 670, 320);
+    ctx.font = "bold 40px monospace"; ctx.fillText(playerScore.toString().padStart(2, '0'), 700, 370);
+
+    // --- 画面状態ごとのオーバーレイ描画 ---
+    
+    // 1. タイトル画面
+    if (gameState === 'TITLE') {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 40px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("くまちゃんエアホッケー", canvas.width / 2, canvas.height / 2 - 30);
+        
+        ctx.font = "20px sans-serif";
+        ctx.fillStyle = "#facc48";
+        ctx.fillText("クリック または タップ でスタート！", canvas.width / 2, canvas.height / 2 + 30);
+        ctx.textAlign = "left"; // 元に戻す
+    }
+
+    // 2. ゲームオーバー（リザルト＆コンテニュー）画面
+    if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.textAlign = "center";
+        
+        // 勝敗による大きな文字表示
+        if (matchResult === 'WIN') {
+            ctx.fillStyle = "#ffde34"; // 金色
+            ctx.font = "bold 80px sans-serif";
+            ctx.fillText("YOU WIN !!", canvas.width / 2, canvas.height / 2 - 40);
+        } else {
+            ctx.fillStyle = "#6ca0dc"; // 青色
+            ctx.font = "bold 80px sans-serif";
+            ctx.fillText("YOU LOSE...", canvas.width / 2, canvas.height / 2 - 40);
+        }
+        
+        // 最終スコア記録の表示
+        ctx.fillStyle = "#fff";
+        ctx.font = "30px monospace";
+        ctx.fillText(`SCORE  ${playerScore} - ${enemyScore}`, canvas.width / 2, canvas.height / 2 + 30);
+        
+        // コンテニュー案内
+        ctx.fillStyle = "#aaa";
+        ctx.font = "18px sans-serif";
+        ctx.fillText("画面をクリック・タップでタイトルへ戻る", canvas.width / 2, canvas.height / 2 + 100);
+        
+        ctx.textAlign = "left"; // 元に戻す
+    }
+}
+
+// ゲーム開始
+gameLoop();
+</script>
+</body>
+</html>
