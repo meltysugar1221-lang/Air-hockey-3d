@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>くまちゃんエアホッケー</title>
+    <style>
+        body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+        canvas { background: #555; border: 4px solid #fff; max-width: 100%; max-height: 100%; }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="450"></canvas> <script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// --- 1. 素材の読み込み設定 ---
+const imgCourt = new Image(); imgCourt.src = 'court.png'; // コート背景
+const imgBall = new Image();  imgBall.src = 'pack.png';   // パック
+const imgMallet = new Image();imgMallet.src = 'mallet.png'; // プレイヤーラケット
+const imgBear = new Image();  imgBear.src = 'bear_sprites.png'; // 敵くま（スプライト）
+
+// 音声の設定
+const audioBGM = new Audio('bgm.mp3'); audioBGM.loop = true;
+const sndHit = new Audio('hit.mp3');
+const sndScore = new Audio('score.mp3');
+
+let gameStarted = false;
+
+// --- ゲームデータ ---
+let playerScore = 0, enemyScore = 0;
+let puck = { x: 400, y: 250, vx: 6, vy: 4, radius: 15 };
+let player = { x: 400, y: 380, radius: 25 };
+let enemy = { x: 400, y: 120, radius: 25, speed: 4, spriteIndex: 0 };
+
+// ユーザーが画面を触ったらBGMを再生（ブラウザの仕様対策）
+window.addEventListener('click', () => { if(!gameStarted) { audioBGM.play(); gameStarted = true; } });
+window.addEventListener('touchstart', () => { if(!gameStarted) { audioBGM.play(); gameStarted = true; } });
+
+// 操作イベント（PC・スマホ両対応）
+function movePlayer(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    let targetX = (clientX - rect.left) * (canvas.width / rect.width);
+    let targetY = (clientY - rect.top) * (canvas.height / rect.height);
+    
+    // プレイエリア制限（左右の壁、中央ライン、手前の壁）
+    player.x = Math.max(160, Math.min(640, targetX)); 
+    player.y = Math.max(240, Math.min(420, targetY));
+}
+canvas.addEventListener("mousemove", (e) => movePlayer(e.clientX, e.clientY));
+canvas.addEventListener("touchmove", (e) => { e.preventDefault(); movePlayer(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function update() {
+    puck.x += puck.vx; puck.y += puck.vy;
+
+    // 壁の衝突（横幅は150px〜650pxの間がコートと想定）
+    if (puck.x - puck.radius < 150 || puck.x + puck.radius > 650) {
+        puck.vx *= -1;
+        sndHit.cloneNode().play(); // 衝突音
+    }
+
+    // ゴール判定（上下）
+    if (puck.y - puck.radius < 50) { // 奥のゴール
+        if (puck.x > 320 && puck.x < 480) { enemyScore++; sndScore.play(); resetPuck(); } 
+        else { puck.vy *= -1; sndHit.cloneNode().play(); }
+    }
+    if (puck.y + puck.radius > 420) { // 手前のゴール
+        if (puck.x > 320 && puck.x < 480) { playerScore++; sndScore.play(); resetPuck(); } 
+        else { puck.vy *= -1; sndHit.cloneNode().play(); }
+    }
+
+    // 敵くまのAIとアニメーション制御
+    let oldX = enemy.x;
+    if (enemy.x < puck.x - 10) { enemy.x += enemy.speed; enemy.spriteIndex = 2; } // 右移動顔
+    else if (enemy.x > puck.x + 10) { enemy.x -= enemy.speed; enemy.spriteIndex = 1; } // 左移動顔
+    else { enemy.spriteIndex = 0; } // 正面顔
+
+    // マレット（敵・味方）との衝突
+    if (checkCollision(player)) { enemy.spriteIndex = 3; } // プレイヤーが打ったらクマが驚く/ドヤる顔に
+    checkCollision(enemy);
+}
+
+function checkCollision(mallet) {
+    let dx = puck.x - mallet.x, dy = puck.y - mallet.y;
+    let distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance < puck.radius + mallet.radius) {
+        let angle = Math.atan2(dy, dx);
+        let speed = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+        puck.vx = Math.cos(angle) * (speed + 0.2);
+        puck.vy = Math.sin(angle) * (speed + 0.2);
+        sndHit.cloneNode().play();
+        return true;
+    }
+    return false;
+}
+
+function resetPuck() { puck.x = 400; puck.y = 250; puck.vx = (Math.random() > 0.5 ? 5 : -5); puck.vy = 3; }
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. 背景コートの描画
+    ctx.drawImage(imgCourt, 0, 0, canvas.width, canvas.height);
+
+    // 2. 敵くま（スプライト画像から現在のコマを切り出して描画）
+    // ※画像サイズが1枚あたり横120px、縦120pxの場合の例
+    let spriteWidth = 120;
+    ctx.drawImage(imgBear, enemy.spriteIndex * spriteWidth, 0, spriteWidth, 120, enemy.x - 60, enemy.y - 100, 120, 120);
+
+    // 3. パックとマレットの描画
+    ctx.drawImage(imgBall, puck.x - puck.radius, puck.y - puck.radius, puck.radius*2, puck.radius*2);
+    ctx.drawImage(imgMallet, player.x - player.radius, player.y - player.radius, player.radius*2, player.radius*2);
+
+    // 4. スコア表示（UI）
+    ctx.fillStyle = "#fff"; ctx.font = "bold 24px sans-serif";
+    ctx.fillText("YOU: " + playerScore, 40, 100);
+    ctx.fillText("KUMA: " + enemyScore, 680, 100);
+}
+
+imgCourt.onload = () => { gameLoop(); }; // 画像が読み込まれたらスタート
+</script>
+</body>
+</html>
